@@ -1,0 +1,44 @@
+name: Risk tier
+
+# Deterministic tier gate: glob the PR's changed files against the explicit
+# pattern list below and label. No LLM, no parsing of config files — the list
+# is deliberately hardcoded in YAML: deterministic, greppable, and any change
+# to it shows up in the workflow diff (which the review agent reads against
+# the BASE's CRITICAL_PATHS.md). Adjust the list per repo; it must stay in
+# sync with CRITICAL_PATHS.md "## Paths".
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  classify:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+    steps:
+      - name: Label critical-path changes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -e
+          CHANGED=$(gh api --paginate "repos/{owner}/{repo}/pulls/$PR_NUMBER/files" --jq '.[].filename')
+          HIGH=no
+          PATTERNS=(
+            "__CRITICAL_PATTERNS__"
+          )
+          while IFS= read -r f; do
+            for p in "${PATTERNS[@]}"; do
+              case "$f" in $p) HIGH=yes; break 2;; esac
+            done
+          done <<< "$CHANGED"
+          if [ "$HIGH" = "yes" ]; then
+            gh pr edit "$PR_NUMBER" --add-label "high risk" 2>/dev/null || \
+              gh pr comment "$PR_NUMBER" --body "**high risk** — diff touches a critical path (CRITICAL_PATHS.md). Requires independent review before merge."
+            echo "labeled high"
+          else
+            gh pr edit "$PR_NUMBER" --remove-label "high risk" 2>/dev/null || true
+            echo "not high"
+          fi

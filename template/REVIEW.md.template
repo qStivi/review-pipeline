@@ -1,0 +1,27 @@
+# REVIEW.md — what failure looks like in this repo
+
+For the review agent: this tells you what actually matters here, so you don't burn rounds on what doesn't. Review against these failure modes first; generic style feedback is noise unless it hides one of them.
+
+## Failure modes (priority order) — AUTHOR THESE
+
+<!-- This section is the entire value of this file. Ask: in THIS repo, what does
+     a broken-but-merges change look like? Write each as one line: the failure,
+     in concrete terms. Delete this comment and the examples when you author it.
+
+     Good failure modes name concrete incidents, e.g.:
+     1. The docs lie — README/SPEC claim behavior the code doesn't have.
+     2. The state machine in <file> is violated via the API — <invariant>.
+     3. Timezone bugs — timestamps are ground truth for <downstream consumer>.
+     4. Sync double-writes — <external write> retried without idempotency.
+     5. Secrets/endpoints — creds in code/logs, DSNs pointing at prod.
+-->
+
+## Universal rules (keep verbatim)
+
+### Clearing a finding requires evidence
+A false positive is closed with a *written reason backed by a primary source* — the actual merged file, a live command, the CLI's own reference. "I'm confident it's fine" is not a clear. If you cannot cite the evidence, treat the finding as real.
+
+### Non-findings (do not flag)
+- Styling, naming, or structural preferences not tied to a failure mode above.
+- Missing features — that's the roadmap, not a review finding.
+- Choices already recorded in the repo's decision log (DECISIONS.md/ADR, if present).

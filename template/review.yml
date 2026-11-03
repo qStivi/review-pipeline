@@ -1,0 +1,134 @@
+name: Review
+
+# Layer 2+3 of the solo review workflow. Runs a fresh, fenced vibe-cli session
+# on a self-hosted runner. Findings are posted as PR comments, read-only; the
+# bot never approves and never merges. See the review-pipeline repo for the
+# design invariants — every oddity below closes a hole found in the field.
+
+on:
+  pull_request:
+    # opened/ready_for_review: initial review exactly once (created-ready OR
+    # draft->ready flip); the job-level draft gate below prevents review of
+    # premature draft states
+    # synchronize: re-review new commits on an already-reviewed (non-draft) PR
+    types: [opened, ready_for_review, synchronize, reopened]
+
+jobs:
+  review:
+    runs-on: self-hosted
+    if: github.event.pull_request.draft == false
+    permissions:
+      pull-requests: write
+      contents: read
+    steps:
+      - name: Checkout BASE review criteria (per-run dir, fence-allowlisted prefix)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: pr-review-base
+      - name: Move base checkout to per-run dir
+        run: |
+          BASE_DIR=$(mktemp -d /tmp/pr-review-base-XXXX)
+          rmdir "$BASE_DIR"   # mktemp's dir exists; mv would move INTO it otherwise
+          mv pr-review-base "$BASE_DIR"
+          chmod 700 "$BASE_DIR"   # rename preserves the checkout's 0755, not mktemp's 700
+          echo "BASE_DIR=$BASE_DIR" >> "$GITHUB_ENV"
+
+      - name: Fetch PR context
+        run: |
+          gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json title,body,baseRefName > /tmp/pr.json
+          gh pr diff "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" > /tmp/pr.diff
+          gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/commits" --jq '.[] | .commit.message | split("\n")[0]' > /tmp/pr-commits.txt
+          grep -q '[^[:space:]]' /tmp/pr-commits.txt || { echo "pr-commits.txt effectively empty — fetch failed"; exit 1; }
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Preflight — assert review criteria are readable (loud fence-regression tripwire)
+        run: |
+          for f in REVIEW.md CRITICAL_PATHS.md docs/SPEC.md; do
+            [ -r "$BASE_DIR/$f" ] || { echo "PREFLIGHT FAIL: $BASE_DIR/$f not readable"; exit 1; }
+          done
+          echo "Preflight OK: base criteria readable"
+
+      - name: Count prior review rounds (round cap = 3)
+        id: rounds
+        run: |
+          PREV=$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
+            --jq '[.[] | select(.user.login == "${{ vars.REVIEW_BOT_LOGIN }}" or .user.login == "github-actions[bot]") | select(.body | startswith("**Review (round"))] | length')
+          echo "count=$PREV" >> "$GITHUB_OUTPUT"
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Round cap reached — stop reviewing
+        if: steps.rounds.outputs.count >= 3
+        run: |
+          if ! gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" --jq '[.[] | select(.user.login == "github-actions[bot]") | select(.body | startswith("**Review round cap reached"))] | length' | grep -q '[1-9]'; then
+            gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body "**Review round cap reached** (3). Per the round discipline: stop iterating, rethink the approach (Layer 0), then open a fresh PR or push a restructured change."
+          fi
+          exit 0
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run vibe review
+        if: steps.rounds.outputs.count < 3
+        run: |
+          set -a; . /opt/review-agent/review.env; set +a
+          # NO --auto-approve: on vibe 3.0.2 it bypasses the read_file denylist
+          # in the fenced VIBE_HOME (verified live). Without it, denied reads
+          # fail instantly without hanging, so headless mode still works.
+          cat > /tmp/pr-prompt.txt <<'PROMPT_EOF'
+          You are the independent code reviewer (Layer 2/3) for a solo-developer repo.
+
+          Read these files in __BASE_DIR__ (the BASE branch's checkout —
+          the review criteria are deliberately the base's, not the PR's;
+          the PR's changes reach you only via /tmp/pr.diff):
+          - REVIEW.md (what failure looks like here — review against these modes, ignore non-findings)
+          - CRITICAL_PATHS.md (if the diff touches any path, say "RISK:HIGH" in your verdict)
+          - docs/SPEC.md and docs/DECISIONS.md sections relevant to the diff, if they exist
+
+          Also read (fetched outside the checkout):
+          - /tmp/pr.json (PR title + change note)
+          - /tmp/pr-commits.txt (commit list)
+          - /tmp/pr.diff (the diff to review)
+
+          On re-reviews the diff is cumulative — focus on the newest commits
+          listed in /tmp/pr-commits.txt relative to prior review rounds.
+
+          Output rules (this is posted to the PR verbatim):
+          - Start with "**Review (round ${{ steps.rounds.outputs.count }})**" then a numbered list of findings.
+          - Each finding: file/line, what can go wrong per a REVIEW.md failure mode (or security: secrets,
+            endpoints, destructive commands), and a concrete suggested fix.
+          - Security findings get their own "Security:" prefix.
+          - If nothing is wrong: the round header line, then exactly "No findings." on the next line. Do not pad. Do not give style feedback.
+          - Never suggest merging; the merge decision is the human's.
+          PROMPT_EOF
+          sed -i "s|__BASE_DIR__|$BASE_DIR|g" /tmp/pr-prompt.txt
+          VIBE_HOME=/opt/review-agent/vibe-home \
+          vibe -p --output text < /tmp/pr-prompt.txt > /tmp/review.md
+          grep -q '\*\*Review (round' /tmp/review.md || { echo "malformed review output — refusing to post"; exit 1; }
+
+      - name: Post findings
+        if: steps.rounds.outputs.count < 3
+        run: gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file /tmp/review.md
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cleanup per-run artifacts
+        if: always()
+        run: |
+          case "$BASE_DIR" in
+            /tmp/pr-review-base-????) rm -rf "$BASE_DIR" ;;
+            *) echo "BASE_DIR unexpected: '$BASE_DIR' — not removing" ;;
+          esac
+
+      - name: Post pipeline-failure diagnostic (never a code finding)
+        if: failure()
+        run: |
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body "**Review pipeline failure** — the review agent did not complete. This is NOT a code finding; the red review check means the reviewer is broken, not the change. Mechanical cause: see the [run logs]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)."
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,18 @@
+# AGENTS.md — checklist for coding agents in this repo
+
+Short by design. A checklist, not documentation. Full context: the repo's own SPEC/docs, REVIEW.md, CRITICAL_PATHS.md.
+
+## Before committing — AUTHOR THE FIRST ITEMS (repo-specific invariants)
+<!-- e.g. "[ ] all write paths go through <store function>, no direct SQL" -->
+- [ ] Build and tests pass: <the repo's commands — AUTHOR>
+- [ ] No secrets/DSNs/tokens in code, tests, or logs
+
+## PRs
+- Fill the change note template fully — including **undo-how**; "can't state it" = not ready
+- Pick the risk tier honestly; when in doubt round up
+- Review agent findings: fix, or reply with a clear written reason **backed by evidence** (primary source, live check)
+
+## Round discipline
+- Review capped at 3 rounds. Round 4 = stop, rethink the approach (Layer 0).
+- Re-reviews: new commits only.
+- Red review check = reviewer broken, not code broken — check for the pipeline-failure comment before treating it as a finding.

@@ -1,0 +1,9 @@
+# Regression log
+
+One line per real incident or revert: what the bug was, which layer should have caught it, and the systematic fix. The only metric the review workflow keeps — costs nothing in quiet periods.
+
+Universal incidents (vibe-CLI facts, relevant to every repo using this pipeline) are pre-seeded below; number your repo's own incidents from 003.
+
+| # | Date | Incident | Should have been caught by | Systematic fix |
+|---|------|----------|---------------------------|----------------|
+__SEED_ROWS__

@@ -1,0 +1,37 @@
+# Fenced VIBE_HOME for the review agent — install at /opt/review-agent/vibe-home/config.toml
+# Extracted from the CT 143 production fence (qStivi/qCalendar pipeline).
+# Verify flags against your vibe version before first use; semantics below are
+# verified on vibe 3.0.2.
+
+# Read-only reviewer: file reads only. No bash, no write/edit, no process
+# tools, no web/network, no subagents.
+enabled_tools = ["read_file"]
+
+# No connectors: the reviewer must never be able to touch GitHub, mail,
+# calendars, or the web — its only inputs are the base checkout and /tmp/pr*.
+enable_connectors = false
+
+[tools.read_file]
+# Allowlist: the base checkout lands at a per-run /tmp/pr-review-base-XXXX dir.
+# NOTE glob semantics: * does NOT cross "/" in vibe 3.0.2 — depth levels must
+# be enumerated explicitly. x8 covers any realistic checkout tree.
+allow = [
+  "/tmp/pr*",
+  "/tmp/pr*/*",
+  "/tmp/pr*/*/*",
+  "/tmp/pr*/*/*/*",
+  "/tmp/pr*/*/*/*/*",
+  "/tmp/pr*/*/*/*/*/*",
+  "/tmp/pr*/*/*/*/*/*/*",
+  "/tmp/pr*/*/*/*/*/*/*/*/*",
+]
+# Denylist: host config, credentials, the agent's own key, runner internals.
+# The fence resolves symlinks before matching, so a pr*-named link can never
+# escape to a denied path (verified live).
+deny = [
+  "/etc/**",
+  "/root/**",
+  "/opt/**",
+  "review.env",
+  ".credentials*",
+]
